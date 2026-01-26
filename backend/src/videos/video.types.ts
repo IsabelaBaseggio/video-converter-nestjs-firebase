@@ -4,7 +4,7 @@ export interface VideoDoc {
     title?: string;
     inputPath: string;
     outputPath?: string;
-    status: 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILER';
+    status: 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED';
     createdAt: FirebaseFirestore.Timestamp;
     originalFileName?: string;
     preset: 'MP4_720P';
