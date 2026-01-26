@@ -11,9 +11,11 @@ import {
     Res,
     UnauthorizedException,
     Query,
+    BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { videoFileFilter } from '../common/utils/file-upload.utils';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import { FirebaseService } from '../firebase/firebase.service'
 import { VideosService } from './videos.service';
@@ -32,7 +34,10 @@ export class VideosController {
 
     @UseGuards(FirebaseAuthGuard)
     @Post()
-    @UseInterceptors(FileInterceptor('file'))
+    @UseInterceptors(FileInterceptor('file', {
+        fileFilter: videoFileFilter,
+        limits: { fileSize: 100 * 1024 * 1024 }
+    }))
     async upload(
         @UploadedFile() file: Express.Multer.File,
         @Body() body: CreateVideoDto,

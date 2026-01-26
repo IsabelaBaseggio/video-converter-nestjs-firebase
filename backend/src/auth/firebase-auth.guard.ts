@@ -7,13 +7,19 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { FirebaseService } from '../firebase/firebase.service';
+import { FirebaseUser } from './user.interface';
+
+// Estende o Request para incluir user
+interface RequestWithUser extends Request {
+    user?: FirebaseUser;
+}
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
     constructor(private readonly firebaseService: FirebaseService) { }
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
-        const request = context.switchToHttp().getRequest<Request>();
+        const request = context.switchToHttp().getRequest<RequestWithUser>();
         const authHeader = request.headers.authorization;
 
         if (!authHeader) {
@@ -29,7 +35,7 @@ export class FirebaseAuthGuard implements CanActivate {
         try {
             const decodedToken = await this.firebaseService.verifyIdToken(token);
 
-            request['user'] = {
+            request.user = {
                 uid: decodedToken.uid,
                 email: decodedToken.email,
             };

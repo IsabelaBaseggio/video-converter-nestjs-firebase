@@ -8,7 +8,7 @@ const execAsync = promisify(exec);
 @Injectable()
 export class FFmpegService {
     async convertTo720p(inputPath: string, outputPath: string): Promise<void> {
-        const command = `ffmpeg -y -i "${inputPath}" -vf scale=-2:720 "${outputPath}"`;
+        const command = `ffmpeg -y -i "${inputPath}" -vf scale=-2:720 -c:v libx264 -pix_fmt yuv420p -preset fast "${outputPath}"`;
 
         try {
             await execAsync(command);

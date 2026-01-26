@@ -7,6 +7,11 @@ import {
     HttpStatus,
 } from '@nestjs/common';
 
+interface HttpErrorResponse {
+    message?: string;
+    [key: string]: any;
+}
+
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
     catch(exception: unknown, host: ArgumentsHost) {
@@ -18,9 +23,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
                 ? exception.getStatus()
                 : HttpStatus.INTERNAL_SERVER_ERROR;
 
-        const responseBody =
+        const responseBody: HttpErrorResponse =
             exception instanceof HttpException
-                ? exception.getResponse()
+                ? (exception.getResponse() as HttpErrorResponse)
                 : { message: 'Internal server error' };
 
         response.status(status).json({
@@ -28,7 +33,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
             message:
                 typeof responseBody === 'string'
                     ? responseBody
-                    : responseBody['message'],
+                    : responseBody.message || 'Internal server error',
         });
     }
 }

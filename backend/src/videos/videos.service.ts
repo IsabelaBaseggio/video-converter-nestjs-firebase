@@ -33,7 +33,8 @@ export class VideosService {
         const storage = this.firebaseService.getStorage();
 
         const videoId = uuidv4();
-        const inputPath = `videos/${userId}/${videoId}/input.mp4`;
+        const extension = file.originalname.split('.').pop();
+        const inputPath = `videos/${userId}/${videoId}/input.${extension}`;
 
         await storage.file(inputPath).save(file.buffer, {
             contentType: file.mimetype,
@@ -98,7 +99,8 @@ export class VideosService {
         mkdirSync(tempDir, { recursive: true });
 
 
-        const inputFile = join(tempDir, `${videoId}-input.mp4`);
+        const originalExtension = video.originalFileName.split('.').pop();
+        const inputFile = join(tempDir, `${videoId}-input.${originalExtension}`);
         const outputFile = join(tempDir, `${videoId}-720p.mp4`);
 
         // input's download
