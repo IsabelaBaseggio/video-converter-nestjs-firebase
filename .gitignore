@@ -1,8 +1,10 @@
-# Nestjs specific
-/dist
-/node_modules
-/build
-/tmp
+# Node modules and build outputs
+**/node_modules
+**/dist
+**/build
+**/tmp
+**/.temp
+**/.tmp
 
 # Logs
 logs
@@ -14,11 +16,18 @@ yarn-error.log*
 lerna-debug.log*
 
 # dotenv environment variable files
-.env
-.env.development
-.env.test
-.env.production
+**/.env
+**/.env.*.local
+**/.env.* 
 
-# temp directory
-.temp
-.tmp
+# IDEs and editors
+/.idea/
+/.vscode/
+/*.sublime-workspace
+/*.launch
+
+# OS files
+.DS_Store
+
+# Checklist or other docs
+CHECKLIST.md
