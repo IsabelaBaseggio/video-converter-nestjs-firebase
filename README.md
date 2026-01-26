@@ -155,7 +155,6 @@ Funcionalidades:
 - Login anônimo com Firebase Auth
 - Upload de vídeo
 - Solicitar conversão
-- Acompanhar status (polling manual)
 - Download do vídeo final
 
 ```text
