@@ -36,7 +36,6 @@ export class VideosController {
     @Post()
     @UseInterceptors(FileInterceptor('file', {
         fileFilter: videoFileFilter,
-        limits: { fileSize: 100 * 1024 * 1024 }
     }))
     async upload(
         @UploadedFile() file: Express.Multer.File,
