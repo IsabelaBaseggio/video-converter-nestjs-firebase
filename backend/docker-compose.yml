@@ -1,0 +1,30 @@
+services:
+  backend:
+    # Build configuration using the local Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    container_name: backend-app
+    
+    # Map host port 3000 to container port 3000
+    ports:
+      - "3000:3000"
+    
+    # Inject environment variables from the .env file
+    # This keeps sensitive Firebase credentials out of the image layers
+    env_file:
+      - .env
+    
+    # Ensure the container automatically restarts on failure or system reboot
+    # unless it was explicitly stopped by the user
+    restart: unless-stopped
+    
+    # Static DNS configuration (Google DNS)
+    # Essential for preventing connection timeouts and ERR_STREAM_DESTROYED 
+    # when communicating with Firebase Storage and Firestore APIs
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+    # The backend interacts with FFmpeg for video processing; 

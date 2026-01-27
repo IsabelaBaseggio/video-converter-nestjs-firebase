@@ -171,22 +171,38 @@ Não há preocupação com layout ou UX.
 
 ---
 
-## 🐳 Como Rodar (Docker)
+## 🐳 Como Rodar o Backend (Docker)
 
-### Backend
+O backend pode ser executado de duas formas. Certifique-se de estar dentro da pasta `/backend` antes de iniciar o processo.
 
-Pré-requisitos:
-- Docker instalado
+> **Configuração Obrigatória:** Você deve criar um arquivo `.env` na raiz da pasta `/backend` com as credenciais do Firebase Admin SDK antes de iniciar os containers.
+
+### Opção 1: Via Docker Compose (Recomendado)
+Esta é a forma mais automatizada, pois configura as regras de rede, DNS e injeção de ambiente em um único comando.
 
 ```bash
+# Entrar no diretório
 cd backend
-docker build -t video-converter-backend .
-docker run -p 3000:3000 --env-file .env video-converter-backend
+
+# Construir a imagem e subir o container
+docker-compose up --build
 ```
 
-```text
-Deve ser criado um .env com as credenciais do Firebase Admin SDK antes de rodar o container.
+### Opção 2: Via Docker CLI (Manual)
+Caso prefira gerenciar os passos manualmente via terminal:
+
+```bash
+# 1. Entrar no diretório
+cd backend
+
+# 2. Build da imagem (snapshot do código atual)
+docker build -t video-converter-backend .
+
+# 3. Execução do container passando o arquivo de ambiente
+docker run --name backend-app -p 3000:3000 --env-file .env video-converter-backend
 ```
+
+
 
 ### Frontend
 
