@@ -175,6 +175,9 @@ Não há preocupação com layout ou UX.
 
 ### Backend
 
+Pré-requisitos:
+- Docker instalado
+
 ```bash
 cd backend
 docker build -t video-converter-backend .
