@@ -7,53 +7,57 @@ import {
     BadRequestException,
     InternalServerErrorException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { FirebaseService } from '../firebase/firebase.service';
 import { VideoStatus } from './video-status.enum';
 import { v4 as uuidv4 } from 'uuid';
-import { FFmpegService } from '../ffmpeg/ffmpeg.service';
-import { join } from 'path';
-import { mkdirSync, unlinkSync } from 'fs';
 import { VideoDoc } from './video.types';
-
+import { VIDEO_QUEUE } from '../queue/queue.module';
+import { ConversionJobData } from '../queue/video.processor';
 
 @Injectable()
 export class VideosService {
     constructor(
         private readonly firebaseService: FirebaseService,
-        private readonly ffmpegService: FFmpegService,
+        @InjectQueue(VIDEO_QUEUE) private readonly videoQueue: Queue,
     ) { }
-
 
     async uploadVideo(
         userId: string,
         file: Express.Multer.File,
         title?: string,
     ) {
-        const firestore = this.firebaseService.getFirestore();
-        const storage = this.firebaseService.getStorage();
+        try {
+            const firestore = this.firebaseService.getFirestore();
+            const storage = this.firebaseService.getStorage();
 
-        const videoId = uuidv4();
-        const extension = file.originalname.split('.').pop();
-        const inputPath = `videos/${userId}/${videoId}/input.${extension}`;
+            const videoId = uuidv4();
+            const extension = file.originalname.split('.').pop();
+            const inputPath = `videos/${userId}/${videoId}/input.${extension}`;
 
-        await storage.file(inputPath).save(file.buffer, {
-            contentType: file.mimetype,
-        });
+            await storage.file(inputPath).save(file.buffer, {
+                contentType: file.mimetype,
+            });
 
-        await firestore.collection('videos').doc(videoId).set({
-            userId,
-            title: file.originalname,
-            status: VideoStatus.UPLOADED,
-            inputPath,
-            createdAt: new Date(),
-            originalFileName: file.originalname,
-            preset: 'MP4_720P',
-        });
+            await firestore.collection('videos').doc(videoId).set({
+                userId,
+                title: file.originalname,
+                status: VideoStatus.UPLOADED,
+                inputPath,
+                createdAt: new Date(),
+                originalFileName: file.originalname,
+                preset: 'MP4_720P',
+            });
 
-        return {
-            id: videoId,
-            status: VideoStatus.UPLOADED,
-        };
+            return {
+                id: videoId,
+                status: VideoStatus.UPLOADED,
+            };
+        } catch (err) {
+            console.error('UPLOAD ERROR:', err);
+            throw err;
+        }
     }
 
     async startConversion(videoId: string, userId: string) {
@@ -61,11 +65,9 @@ export class VideosService {
         const docRef = firestore.collection('videos').doc(videoId);
         const snapshot = await docRef.get();
 
-
         if (!snapshot.exists) {
             throw new NotFoundException('Video not found');
         }
-
 
         const video = snapshot.data() as VideoDoc;
 
@@ -77,63 +79,27 @@ export class VideosService {
             throw new ForbiddenException();
         }
 
+        const jobData: ConversionJobData = {
+            videoId,
+            userId,
+            inputPath: video.inputPath,
+            originalFileName: video.originalFileName,
+        };
+
+        await this.videoQueue.add('convert', jobData, {
+            attempts: 3,
+            backoff: {
+                type: 'exponential',
+                delay: 5000,
+            },
+        });
+
         await docRef.update({
             status: VideoStatus.PROCESSING,
             startedAt: new Date(),
         });
 
-        // roda async
-        this.processConversion(videoId, video).catch(async (err) => {
-            await docRef.update({
-                status: VideoStatus.FAILED,
-                error: err.message,
-            });
-        });
-    }
-
-    private async processConversion(videoId: string, video: any) {
-        const storage = this.firebaseService.getStorage();
-
-
-        const tempDir = join(process.cwd(), 'temp');
-        mkdirSync(tempDir, { recursive: true });
-
-
-        const originalExtension = video.originalFileName.split('.').pop();
-        const inputFile = join(tempDir, `${videoId}-input.${originalExtension}`);
-        const outputFile = join(tempDir, `${videoId}-720p.mp4`);
-
-        // input's download
-        await storage.file(video.inputPath).download({
-            destination: inputFile,
-        });
-
-        // converter
-        await this.ffmpegService.convertTo720p(inputFile, outputFile);
-
-        // output's upload
-        const outputPath = `videos/${video.userId}/${videoId}/output-720p.mp4`;
-        await storage.upload(outputFile, {
-            destination: outputPath,
-            contentType: 'video/mp4',
-        });
-
-        // update firestore
-        await this.firebaseService
-            .getFirestore()
-            .collection('videos')
-            .doc(videoId)
-            .update({
-                status: VideoStatus.DONE,
-                outputPath,
-                finishedAt: new Date(),
-                title: `${video.originalFileName.replace(/\.[^/.]+$/, '')}_720p.mp4`,
-            });
-
-
-        // cleanup
-        unlinkSync(inputFile);
-        unlinkSync(outputFile);
+        return { message: 'Conversion queued' };
     }
 
     async getVideo(videoId: string, userId: string) {
@@ -212,10 +178,7 @@ export class VideosService {
         const filename = `${safeName}_720p.mp4`;
 
         res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename="${filename}"`,
-        );
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
         file.createReadStream().pipe(res);
     }

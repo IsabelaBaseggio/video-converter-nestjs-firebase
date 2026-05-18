@@ -1,30 +1,33 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
-    # Build configuration using the local Dockerfile
     build:
       context: .
       dockerfile: Dockerfile
-    
     container_name: backend-app
-    
-    # Map host port 3000 to container port 3000
     ports:
       - "3000:3000"
-    
-    # Inject environment variables from the .env file
-    # This keeps sensitive Firebase credentials out of the image layers
+      - "3001:3001"
     env_file:
       - .env
-    
-    # Ensure the container automatically restarts on failure or system reboot
-    # unless it was explicitly stopped by the user
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
-    
-    # Static DNS configuration (Google DNS)
-    # Essential for preventing connection timeouts and ERR_STREAM_DESTROYED 
-    # when communicating with Firebase Storage and Firestore APIs
     dns:
       - 8.8.8.8
       - 8.8.4.4
-
-    # The backend interacts with FFmpeg for video processing; 

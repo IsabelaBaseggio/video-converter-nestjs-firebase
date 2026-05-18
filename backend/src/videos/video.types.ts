@@ -6,6 +6,6 @@ export interface VideoDoc {
     outputPath?: string;
     status: 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED';
     createdAt: FirebaseFirestore.Timestamp;
-    originalFileName?: string;
+    originalFileName: string;
     preset: 'MP4_720P';
 }

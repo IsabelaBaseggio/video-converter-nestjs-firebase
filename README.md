@@ -1,6 +1,6 @@
 # Video Converter API
 
-Backend de conversão de vídeos desenvolvido em **NestJS + Firebase**, com um **frontend mínimo em React** apenas para testar o fluxo completo (login, upload, conversão e download).
+Backend de conversão de vídeos desenvolvido em **NestJS + Firebase + BullMQ**, com um **frontend mínimo em React** apenas para testar o fluxo completo (login, upload, conversão e download).
 
 > ⚠️ O foco do projeto é **backend**. O frontend existe somente como client de apoio.
 
@@ -12,7 +12,7 @@ A aplicação permite que usuários autenticados:
 
 - façam upload de um vídeo
 - solicitem a conversão para um preset fixo (MP4 720p)
-- acompanhem o status do processamento
+- acompanhem o status do processamento via polling
 - façam download do arquivo convertido
 
 Todo o isolamento por usuário é garantido via **Firebase Authentication + validação de token no backend**.
@@ -27,13 +27,19 @@ Todo o isolamento por usuário é garantido via **Firebase Authentication + vali
 - Firebase Authentication (validação de ID Token)
 - Firestore (jobs e status)
 - Firebase Storage (input/output)
-- FFmpeg (conversão de vídeo)
-- Docker
+- BullMQ (fila de jobs assíncrona)
+- Redis (broker da fila)
+- fluent-ffmpeg (wrapper Node.js para conversão de vídeo)
+- Docker + Docker Compose
 
 ### Frontend (mínimo)
 
 - React + Vite
 - Firebase Auth (Anonymous Auth)
+
+### Observabilidade
+
+- Bull Board (UI para monitoramento das filas) — disponível em `http://localhost:3000/queues`
 
 ---
 
@@ -46,72 +52,69 @@ Todo o isolamento por usuário é garantido via **Firebase Authentication + vali
 Authorization: Bearer <firebase_id_token>
 ```
 
-- O backend valida o token e associa os dados ao `uid` do usuário
+- O backend valida o token via Firebase Admin SDK e associa os dados ao `uid` do usuário
 - Cada usuário só pode acessar seus próprios vídeos/jobs
+- Guard centralizado (`FirebaseAuthGuard`) protege todas as rotas autenticadas
+- Decorator `@User()` injeta os dados do usuário autenticado nos controllers
+
+---
 
 ## ⚙️ Configuração do Firebase
 
-Para rodar o projeto, é necessário configurar o Firebase para autenticação, Firestore e Storage. Siga os passos abaixo:
+> ⚠️ Firebase Storage requer plano **Blaze (pay-as-you-go)** para uploads via backend (Admin SDK). O plano gratuito Spark não suporta essa operação.
 
 ### 1. Criar projeto no Firebase
 
 1. Acesse [Firebase Console](https://console.firebase.google.com/).
 2. Clique em **Adicionar projeto** e siga as instruções.
 3. Habilite **Authentication**, **Firestore** e **Storage** no painel do projeto.
+4. Faça upgrade para o plano **Blaze** em Configurações → Uso e faturamento.
 
 ### 2. Configurar Firebase Authentication
 
 1. Vá em **Authentication > Métodos de Login**.
 2. Habilite **Login Anônimo** (Anonymous Authentication).
-3. O frontend fará login anônimo e receberá um **ID Token**, que será enviado ao backend em todas as requisições.
 
 ### 3. Configurar Firestore
 
-1. Vá em **Firestore Database** e crie um banco em **modo produção** (ou teste, se preferir).
-2. Crie a coleção `videos`.
-3. Aplique as regras para isolamento por usuário:
+1. Vá em **Firestore Database** e crie um banco em modo produção.
+2. Aplique as regras para isolamento por usuário:
 
-```bash
+```
 rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-
     match /videos/{videoId} {
       allow read, write: if request.auth != null
         && request.auth.uid == resource.data.userId;
     }
-
   }
 }
 ```
 
 ### 4. Configurar Firebase Storage
 
-1. Vá em **Storage** e configure um bucket padrão. produção** (ou teste, se preferir).
-2. Crie a estrutura de pastas no Storage:
-```bash
-/videos/{userId}/{videoId}
+1. Vá em **Storage** e configure um bucket padrão.
+2. Aplique as regras para isolamento por usuário:
+
 ```
-3. Aplique as regras para isolamento por usuário:
-```bash
 rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-
     match /videos/{userId}/{videoId}/{fileName} {
       allow read, write: if request.auth != null
         && request.auth.uid == userId;
     }
-
   }
 }
 ```
 
 ### 5. Configurar variáveis de ambiente
 
-1. No backend,, crie um arquivo `.env` para o **Firebase Admin SDK** com a chave do service account:
+Crie um arquivo `.env` na raiz da pasta `/backend`:
+
 ```bash
 FIREBASE_PROJECT_ID=
 FIREBASE_CLIENT_EMAIL=
@@ -119,30 +122,34 @@ FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
 FIREBASE_STORAGE_BUCKET=
 ```
 
+As variáveis `REDIS_HOST` e `REDIS_PORT` são injetadas automaticamente pelo Docker Compose e não precisam ser configuradas manualmente.
+
 ---
 
 ## 🎥 Fluxo de Vídeo / Job
 
-1. Upload do vídeo (`UPLOADED`)
-2. Início da conversão (`PROCESSING`)
-3. Finalização (`DONE`) ou erro (`FAILED`)
-
-Status armazenado no Firestore e atualizado pelo backend.
-
-```text
-💡 O frontend faz polling a cada 3 segundos para verificar o status do vídeo (PROCESSING, DONE, FAILED).
 ```
+1. Upload do vídeo         → status: UPLOADED
+2. Requisição de conversão → job enfileirado no Redis via BullMQ → status: PROCESSING
+3. Worker consome o job    → download do input, conversão via FFmpeg, upload do output
+4. Finalização             → status: DONE ou FAILED (com retry automático)
+```
+
+O progresso da conversão é atualizado em tempo real na fila (visível no Bull Board).
+O frontend faz polling a cada 3 segundos para verificar o status no Firestore.
 
 ---
 
 ## 🌐 Endpoints Principais
 
-| Método | Endpoint                 | Descrição                      |
-| ------ | ------------------------ | ------------------------------ |
-| POST   | /api/videos              | Upload do vídeo                |
-| POST   | /api/videos/:id/convert  | Inicia conversão               |
-| GET    | /api/videos/:id          | Consulta status e busca vídeos |
-| GET    | /api/videos/:id/download | Download do vídeo convertido   |
+| Método | Endpoint                  | Descrição                        |
+| ------ | ------------------------- | -------------------------------- |
+| POST   | /api/videos               | Upload do vídeo                  |
+| POST   | /api/videos/:id/convert   | Enfileira job de conversão       |
+| GET    | /api/videos/:id           | Consulta status do vídeo         |
+| GET    | /api/videos               | Lista vídeos do usuário          |
+| GET    | /api/videos/:id/download  | Download do vídeo convertido     |
+| GET    | /queues                   | Bull Board (UI das filas)        |
 
 ---
 
@@ -155,11 +162,10 @@ Funcionalidades:
 - Login anônimo com Firebase Auth
 - Upload de vídeo
 - Solicitar conversão
+- Polling de status
 - Download do vídeo final
 
-```text
-💡 Frontend (React) requer um arquivo `.env` com as seguintes variáveis:
-```
+O frontend requer um arquivo `.env` em `/frontend`:
 
 ```bash
 VITE_FIREBASE_API_KEY=
@@ -167,42 +173,21 @@ VITE_FIREBASE_AUTH_DOMAIN=
 VITE_FIREBASE_PROJECT_ID=
 ```
 
-Não há preocupação com layout ou UX.
-
 ---
 
-## 🐳 Como Rodar o Backend (Docker)
+## 🐳 Como Rodar
 
-O backend pode ser executado de duas formas. Certifique-se de estar dentro da pasta `/backend` antes de iniciar o processo.
+Certifique-se de estar dentro da pasta `/backend` e de ter o arquivo `.env` configurado.
 
-> **Configuração Obrigatória:** Você deve criar um arquivo `.env` na raiz da pasta `/backend` com as credenciais do Firebase Admin SDK antes de iniciar os containers.
-
-### Opção 1: Via Docker Compose (Recomendado)
-Esta é a forma mais automatizada, pois configura as regras de rede, DNS e injeção de ambiente em um único comando.
+O Docker Compose sobe três serviços:
+- **redis** — broker da fila BullMQ
+- **backend** — API NestJS + worker de conversão
+- **Bull Board** — acessível em `http://localhost:3000/queues`
 
 ```bash
-# Entrar no diretório
 cd backend
-
-# Construir a imagem e subir o container
 docker-compose up --build
 ```
-
-### Opção 2: Via Docker CLI (Manual)
-Caso prefira gerenciar os passos manualmente via terminal:
-
-```bash
-# 1. Entrar no diretório
-cd backend
-
-# 2. Build da imagem (snapshot do código atual)
-docker build -t video-converter-backend .
-
-# 3. Execução do container passando o arquivo de ambiente
-docker run --name backend-app -p 3000:3000 --env-file .env video-converter-backend
-```
-
-
 
 ### Frontend
 
@@ -212,120 +197,67 @@ npm install
 npm run dev
 ```
 
-Frontend disponível em:
-
-```
-http://localhost:5173
-```
+Frontend disponível em `http://localhost:5173`.
 
 ---
 
 ## 🔥 Decisões Técnicas
 
-- **Conversão síncrona simples:** sem filas externas, cada job é processado imediatamente pelo backend.
-- **Preset único de vídeo:** MP4 720p, para reduzir complexidade e padronizar saída.
-- **FFmpeg isolado por job:** cada conversão roda em seu próprio contexto, com input/output separados no Firebase Storage (`/videos/{userId}/{videoId}/input` e `/videos/{userId}/{videoId}/output`).
-- **API_URL global:** todas as chamadas do frontend usam uma URL base (`API_URL`) para simplificar endpoints e permitir fácil troca de ambiente (dev/prod).
-- **Polling de status:** frontend consulta o status a cada 3 segundos durante a conversão (`PROCESSING, DONE, FAILED`).
-- **Firebase Admin SDK no backend:** validação de tokens, controle de acesso e leitura/escrita segura no Firestore/Storage.
-- **Segurança por UID:** cada usuário só consegue acessar seus próprios vídeos/jobs, tanto no backend quanto nas regras do Firebase.
-- **Frontend mínimo:** React + Vite serve apenas como client de teste, sem preocupação com UX ou layout.
-- **Docker com FFmpeg instalado:** garante consistência de ambiente entre dev e produção.
-- **Estrutura de diretórios no Storage:** input/output separados por usuário e job, evitando conflitos.
-- **Centralização de tokens:** ID Token obtido no login anônimo, enviado em todas as requisições protegidas para autenticação backend.
+### Fila assíncrona com BullMQ
 
-## 🔥 Decisões Técnicas Detalhadas
+A conversão de vídeo é processada de forma assíncrona via fila BullMQ com Redis como broker. Quando o usuário solicita a conversão, um job é enfileirado e o endpoint retorna imediatamente. Um `VideoProcessor` (worker NestJS) consome o job e executa o pipeline completo: download do input, conversão, upload do output e atualização do status no Firestore.
 
-### Modelagem do Firestore
+Vantagens em relação à conversão síncrona:
+- O endpoint não bloqueia aguardando o FFmpeg
+- Retry automático com backoff exponencial (3 tentativas, intervalo crescente)
+- Progresso real da conversão visível no Bull Board
+- Escalável: múltiplos workers podem consumir a mesma fila
 
-- Cada vídeo é um documento na coleção `videos`, identificado por um `videoId` UUID.
-- Estrutura do documento (`VideoDoc`):
-  - `userId`: identifica o dono do vídeo
-  * `title` e `originalFileName`: metadados do vídeo
-  * `inputPath` e `outputPath`: caminhos no Storage para input/output
-  * `status`: `'PENDING' | 'PROCESSING' | 'DONE' | 'ERROR'`
-  * `preset`: atualmente apenas `'MP4_720P'`
-  * `createdAt`, `startedAt`, `finishedAt`: timestamps
+### fluent-ffmpeg
 
-- Regras do Firestore garantem que cada usuário só pode ler/escrever seus próprios vídeos:
+A conversão utiliza `fluent-ffmpeg` como wrapper Node.js em vez de `child_process.exec`. Isso elimina o risco de command injection, oferece uma API tipada e permite capturar o progresso real da conversão via evento `progress`. O binário do FFmpeg continua instalado no container Docker.
 
-```bash
-match /videos/{videoId} {
-    allow read, write: if request.auth != null
-    && request.auth.uid == resource.data.userId;
-}
-```
+### Progresso granular
+
+O progresso do job é atualizado em três fases:
+- 0–20%: download do input do Firebase Storage
+- 20–90%: progresso real do FFmpeg (via `fluent-ffmpeg`)
+- 90–100%: upload do output para o Firebase Storage
 
 ### Organização do NestJS
 
-- Módulos separados para funcionalidades:
-  - `VideosModule`: upload, conversão, listagem e download de vídeos
-  - `FFmpegModule`: encapsula a lógica de conversão
-  - `FirebaseModule`: abstrai acesso ao Firestore e Storage
-- Guards centralizados (`FirebaseAuthGuard`) para validar token do Firebase em todas as rotas protegidas
-- Decorator `@User()` para injetar facilmente os dados do usuário autenticado em controllers
-- Serviço `VideosService`:
-  - Upload salva arquivo no Storage e cria documento no Firestore
-  - Conversão é disparada async via `processConversion` e atualiza status
-  - Download verifica token, status e envia arquivo via stream
-
-### Execução do FFmpeg
-
-- FFmpeg executado localmente dentro do container Docker
-- Cada conversão baixa o input do Storage para `/temp`, roda FFmpeg e faz upload do output
-- Preset fixo: `-vf scale=-2:720`, mantendo proporção
-- Cleanup dos arquivos temporários após upload
-- Serviço `FFmpegService` centraliza lógica de execução e tratamento de erros
+- `FirebaseModule`: abstrai acesso ao Firestore, Storage e Auth
+- `FFmpegModule`: encapsula a lógica de conversão via fluent-ffmpeg
+- `VideosModule`: upload, conversão, listagem e download
+- `QueueModule`: configuração global do BullMQ
+- `VideoProcessor`: worker que consome os jobs da fila
+- `FirebaseAuthGuard`: guard centralizado para validação de token
+- Decorator `@User()`: injeta dados do usuário autenticado nos controllers
 
 ### Segurança por usuário
 
-- Backend valida token do Firebase em todas as requisições
-- Usuário só consegue acessar seus próprios vídeos (upload, status, download)
-- Regras do Storage reforçam isolamento:
+- Backend valida token do Firebase em todas as requisições autenticadas
+- Cada usuário só acessa seus próprios vídeos (validado no service e nas regras do Firebase)
+- Regras do Firestore e Storage reforçam o isolamento por UID
 
-```bash
-match /videos/{userId}/{videoId}/{fileName} {
-    allow read, write: if request.auth != null
-    && request.auth.uid == userId;
-}
-```
+### Docker e ambiente
 
-- Tokens anônimos usados no frontend são verificados no backend antes de qualquer operação crítica
-
-### Endpoints e API global
-
-- Frontend usa `API_URL` global para facilitar troca entre ambientes (dev/prod)
-- Endpoints principais:
-  - É setado globalmente `api` para todos os endpoints permitindo versionamento mais claro das rotas
-  - `POST /videos`: upload
-  - `POST /videos/:id/convert`: iniciar conversão
-  - `GET /videos/:id`: status
-  - `GET /videos/:id/download`: download
-- Polling do status implementado no frontend a cada 3 segundos durante `PROCESSING`
-
-### Docker e Ambiente
-
-- Backend em container Docker com FFmpeg instalado
-- Garante consistência entre desenvolvimento e produção
-- Frontend mínimo roda localmente via Vite, consumindo a mesma API
-
-### Observações adicionais
-
-- Conversão síncrona (não escalável) mas suficiente para teste
-- Input/output organizados por userId e videoId para evitar conflitos
-- Preset único e diretório temporário isolado simplificam gerenciamento de jobs
+- Backend e Redis sobem via Docker Compose com healthcheck no Redis
+- FFmpeg instalado na imagem Docker (Node 18 slim)
+- Variáveis de ambiente sensíveis injetadas via `.env` (nunca na imagem)
+- DNS estático (Google 8.8.8.8) para evitar timeouts nas APIs do Firebase
 
 ---
 
 ## ⚠️ Limitações Conhecidas
 
-- Conversão síncrona (não escalável)
-- Frontend extremamente simples
-- Sem retry automático em falhas
-- Download simplificado (sem expiração de URL avançada)
+- Preset único de conversão (MP4 720p)
+- Frontend extremamente simples, sem preocupação com UX
+- Download via query param `?token=` (limitação de browser para downloads diretos)
+- Conversão não escalável horizontalmente sem ajuste no worker (uma instância por container)
 
 ---
 
 ## ✅ Conclusão
 
-Projeto focado em clareza, isolamento por usuário, simplicidade e aderência ao enunciado do teste técnico.
+Projeto focado em arquitetura assíncrona com filas, isolamento por usuário, observabilidade e boas práticas de segurança no desenvolvimento backend com NestJS.
