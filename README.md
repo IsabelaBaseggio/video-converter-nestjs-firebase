@@ -2,7 +2,7 @@
 
 Backend de conversão de vídeos desenvolvido em **NestJS + Firebase**, com um **frontend mínimo em React** apenas para testar o fluxo completo (login, upload, conversão e download).
 
-> ⚠️ O foco do projeto é **backend**. O frontend **não é avaliado** e existe somente como client de apoio.
+> ⚠️ O foco do projeto é **backend**. O frontend existe somente como client de apoio.
 
 ---
 
